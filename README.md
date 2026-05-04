@@ -131,14 +131,14 @@ src/main/kotlin/com/yun/mybooking/
 ├── domain/                       # 핵심 비즈니스 모델 (순수 JPA 엔티티)
 │   ├── product/   Product, ProductStatus, ProductRepository
 │   ├── user/      User, UserRepository
-│   ├── inventory/ Inventory (totalStock, reservedStock, remainingStock),
-│   │              InventoryRepository (atomicReserve via QueryDSL)
+│   ├── inventory/ Inventory (totalStock, reservedStock, remainingStock, reserve()),
+│   │              InventoryRepository (findByProductId, findByProductIdWithLock)
 │   ├── order/     Order, OrderStatus {PENDING, CONFIRMED}, OrderRepository
 │   └── payment/   Payment, PaymentMethod, PaymentStatus, PaymentRepository
 │
 ├── infrastructure/               # 외부 시스템 연동
 │   ├── idempotency/
-│   │   └── IdempotencyService    # Redis SETNX — "PROCESSING" or orderId
+│   │   └── IdempotencyService    # Redis SETNX — "PROCESSING" (TTL 5분), 완료 시 DEL
 │   ├── inventory/
 │   │   ├── InventoryRedisService # Lua 스크립트 원자적 DECR/INCR
 │   │   └── InventoryInitializer  # 앱 기동 시 Redis 재고 동기화
@@ -181,11 +181,6 @@ sequenceDiagram
         Redis-->>IS: "PROCESSING"
         IS-->>BS: IdempotencyState.Processing
         BS-->>C: 200 OK (status=PENDING)
-    else 완료된 요청
-        Redis-->>IS: orderId
-        IS-->>BS: IdempotencyState.Completed(orderId)
-        BS->>DB: 주문·결제 재조회
-        BS-->>C: 200 OK (이전 결과 반환)
     else 신규 요청
         Redis-->>IS: null
         IS-->>BS: null
@@ -214,9 +209,10 @@ sequenceDiagram
         PG-->>BS: transactionId
         BS->>DB: INSERT payments (COMPLETED)
         BS->>DB: UPDATE orders → CONFIRMED
+        BS->>DB: SELECT FOR UPDATE inventories → reserve() (reserved_stock += 1)
         Note over BS: @Transactional 커밋
-        BS->>IS: complete(key, orderId)
-        IS->>Redis: SET orderId
+        BS->>IS: complete(key)
+        IS->>Redis: DEL key
         BS-->>C: 200 OK (CONFIRMED)
     else 결제 실패
         PG-->>BS: failureReason
@@ -242,13 +238,14 @@ sequenceDiagram
     Redis-->>CB: ConnectionException
     Note over CB: 실패율 50% 초과 → 서킷 오픈
     CB->>BS: reserveInventoryFallback 호출
-    BS->>DB: UPDATE inventories<br/>SET reserved_stock = reserved_stock + 1<br/>WHERE product_id = ?<br/>AND (total_stock - reserved_stock) >= 1
-    alt affected = 1
-        DB-->>BS: 성공
-    else affected = 0
+    BS->>DB: SELECT inventories WHERE product_id = ? (가용 재고 확인)
+    alt remainingStock > 0
+        DB-->>BS: 재고 있음 → 통과
+    else remainingStock <= 0
         DB-->>BS: 재고 소진
         BS-->>BS: throw SOLD_OUT
     end
+    Note over BS: 실제 reserved_stock 갱신은 processOrderAndPayment의 SELECT FOR UPDATE에서 처리
 ```
 
 ---

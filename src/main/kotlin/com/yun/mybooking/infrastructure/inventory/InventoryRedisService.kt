@@ -27,8 +27,6 @@ class InventoryRedisService(
         }
     }
 
-    enum class DecrementResult { SUCCESS, INSUFFICIENT_STOCK, KEY_NOT_FOUND }
-
     fun initInventory(productId: Long, stock: Int) {
         redisTemplate.opsForValue().set(key(productId), stock.toString())
         log.info("Redis 재고 초기화: productId={}, stock={}", productId, stock)
