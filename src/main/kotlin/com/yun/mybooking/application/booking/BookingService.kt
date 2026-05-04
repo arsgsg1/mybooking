@@ -1,17 +1,17 @@
 package com.yun.mybooking.application.booking
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.yun.mybooking.common.exception.BookingException
 import com.yun.mybooking.common.exception.ErrorCode
 import com.yun.mybooking.domain.inventory.InventoryRepository
 import com.yun.mybooking.domain.order.Order
 import com.yun.mybooking.domain.order.OrderRepository
+import com.yun.mybooking.domain.order.OrderStatus
 import com.yun.mybooking.domain.payment.Payment
 import com.yun.mybooking.domain.payment.PaymentRepository
 import com.yun.mybooking.domain.product.Product
 import com.yun.mybooking.domain.product.ProductRepository
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyService
-import com.yun.mybooking.infrastructure.idempotency.IdempotencyStatus
+import com.yun.mybooking.infrastructure.idempotency.IdempotencyState
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService.DecrementResult
 import com.yun.mybooking.infrastructure.payment.CompletedPayment
@@ -35,21 +35,14 @@ class BookingService(
     private val idempotencyService: IdempotencyService,
     private val paymentProcessor: PaymentProcessor,
     private val paymentValidator: PaymentValidator,
-    private val objectMapper: ObjectMapper,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     fun book(idempotencyKey: String, request: BookingRequest): BookingResponse {
-        val existing = idempotencyService.getRecord(idempotencyKey)
-        if (existing != null) {
-            return when (existing.status) {
-                IdempotencyStatus.PROCESSING -> throw BookingException(ErrorCode.IDEMPOTENCY_PROCESSING)
-                IdempotencyStatus.COMPLETED -> objectMapper.readValue(existing.result!!, BookingResponse::class.java)
-                IdempotencyStatus.FAILED -> throw BookingException(
-                    errorCode = ErrorCode.valueOf(existing.errorCode ?: ErrorCode.PAYMENT_FAILED.name),
-                    message = existing.message ?: ErrorCode.PAYMENT_FAILED.message,
-                )
-            }
+        when (val state = idempotencyService.getState(idempotencyKey)) {
+            is IdempotencyState.Processing -> throw BookingException(ErrorCode.IDEMPOTENCY_PROCESSING)
+            is IdempotencyState.Completed -> return reconstructResponse(state.orderId)
+            null -> Unit
         }
 
         if (!idempotencyService.tryAcquire(idempotencyKey)) {
@@ -59,18 +52,26 @@ class BookingService(
         return runCatching {
             executeBooking(idempotencyKey, request)
         }.onSuccess { response ->
-            idempotencyService.complete(idempotencyKey, response)
-        }.onFailure { ex ->
-            val errorCode = if (ex is BookingException) ex.errorCode else ErrorCode.PAYMENT_FAILED
-            idempotencyService.fail(idempotencyKey, errorCode.name, ex.message ?: errorCode.message)
+            idempotencyService.complete(idempotencyKey, response.bookingId)
+        }.onFailure {
+            idempotencyService.release(idempotencyKey)
         }.getOrThrow()
+    }
+
+    private fun reconstructResponse(orderId: Long): BookingResponse {
+        val order = orderRepository.findByIdOrNull(orderId)
+            ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
+        val product = productRepository.findByIdOrNull(order.productId)
+            ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
+        val payments = paymentRepository.findAllByOrderId(orderId)
+        return toResponse(order, product, payments)
     }
 
     private fun executeBooking(idempotencyKey: String, request: BookingRequest): BookingResponse {
         val product = productRepository.findByIdOrNull(request.productId)
             ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
 
-        if (orderRepository.existsByUserIdAndProductId(request.userId, request.productId)) {
+        if (orderRepository.existsByUserIdAndProductIdAndStatus(request.userId, request.productId, OrderStatus.CONFIRMED)) {
             throw BookingException(ErrorCode.ALREADY_PURCHASED)
         }
 
