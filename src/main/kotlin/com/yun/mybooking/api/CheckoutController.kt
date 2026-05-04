@@ -1,5 +1,6 @@
 package com.yun.mybooking.api
 
+import com.yun.mybooking.application.checkout.CheckoutResponse
 import com.yun.mybooking.application.checkout.CheckoutService
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -17,5 +18,5 @@ class CheckoutController(
     fun getCheckout(
         @PathVariable productId: Long,
         @RequestParam userId: Long,
-    ): ApiResponse<*> = ApiResponse.ok(checkoutService.getCheckout(productId, userId))
+    ): ApiResponse<CheckoutResponse> = ApiResponse.ok(checkoutService.getCheckout(productId, userId))
 }
