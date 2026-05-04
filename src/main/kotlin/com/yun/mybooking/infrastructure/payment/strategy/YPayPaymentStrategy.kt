@@ -22,7 +22,6 @@ class YPayPaymentStrategy(
             PgPaymentRequest(
                 orderId = request.orderId,
                 amount = request.amount,
-                token = requireNotNull(request.yPayToken) { "yPayToken is required for Y_PAY" },
             )
         )
         return PaymentResult(

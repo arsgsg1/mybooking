@@ -235,7 +235,6 @@ class BookingServiceTest {
             BookingRequest.PaymentItem(
                 method = PaymentMethod.CREDIT_CARD,
                 amount = 150000L,
-                cardToken = "card_tok_test",
             )
         ),
     )

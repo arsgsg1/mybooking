@@ -22,7 +22,6 @@ class CreditCardPaymentStrategy(
             PgPaymentRequest(
                 orderId = request.orderId,
                 amount = request.amount,
-                token = requireNotNull(request.cardToken) { "cardToken is required for CREDIT_CARD" },
             )
         )
         return PaymentResult(

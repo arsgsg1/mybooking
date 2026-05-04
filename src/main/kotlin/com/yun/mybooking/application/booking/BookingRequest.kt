@@ -17,7 +17,5 @@ data class BookingRequest(
     data class PaymentItem(
         val method: PaymentMethod,
         @field:Positive val amount: Long,
-        val cardToken: String? = null,
-        val yPayToken: String? = null,
     )
 }

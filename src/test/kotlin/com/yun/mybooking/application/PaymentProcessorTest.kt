@@ -34,7 +34,7 @@ class PaymentProcessorTest {
         val processor = PaymentProcessor(listOf(strategy))
 
         val result = processor.processAll(
-            listOf(PaymentRequest(1L, 1L, 150000L, PaymentMethod.CREDIT_CARD, cardToken = "tok"))
+            listOf(PaymentRequest(1L, 1L, 150000L, PaymentMethod.CREDIT_CARD))
         )
 
         assert(result is ProcessResult.Success)
@@ -55,7 +55,7 @@ class PaymentProcessorTest {
 
         val result = processor.processAll(
             listOf(
-                PaymentRequest(1L, 1L, 100000L, PaymentMethod.CREDIT_CARD, cardToken = "tok"),
+                PaymentRequest(1L, 1L, 100000L, PaymentMethod.CREDIT_CARD),
                 PaymentRequest(1L, 1L, 50000L, PaymentMethod.Y_POINTS),
             )
         )
@@ -71,8 +71,8 @@ class PaymentProcessorTest {
         val ex = assertThrows<BookingException> {
             validator.validate(
                 listOf(
-                    PaymentRequest(1L, 1L, 100000L, PaymentMethod.CREDIT_CARD, cardToken = "tok"),
-                    PaymentRequest(1L, 1L, 50000L, PaymentMethod.Y_PAY, yPayToken = "ypay"),
+                    PaymentRequest(1L, 1L, 100000L, PaymentMethod.CREDIT_CARD),
+                    PaymentRequest(1L, 1L, 50000L, PaymentMethod.Y_PAY),
                 ),
                 expectedTotal = 150000L,
             )
@@ -86,7 +86,7 @@ class PaymentProcessorTest {
 
         val ex = assertThrows<BookingException> {
             validator.validate(
-                listOf(PaymentRequest(1L, 1L, 100000L, PaymentMethod.CREDIT_CARD, cardToken = "tok")),
+                listOf(PaymentRequest(1L, 1L, 100000L, PaymentMethod.CREDIT_CARD)),
                 expectedTotal = 150000L,
             )
         }

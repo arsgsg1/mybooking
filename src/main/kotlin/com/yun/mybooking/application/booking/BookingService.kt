@@ -81,8 +81,6 @@ class BookingService(
                 userId = request.userId,
                 amount = item.amount,
                 method = item.method,
-                cardToken = item.cardToken,
-                yPayToken = item.yPayToken,
             )
         }
         paymentValidator.validate(paymentRequests, product.price)

@@ -13,8 +13,6 @@ data class PaymentRequest(
     val userId: Long,
     val amount: Long,
     val method: PaymentMethod,
-    val cardToken: String? = null,
-    val yPayToken: String? = null,
 )
 
 data class PaymentResult(
