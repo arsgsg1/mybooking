@@ -17,4 +17,6 @@ class Inventory(
 
     @Column(nullable = false)
     var reservedStock: Int = 0,
-)
+) {
+    val remainingStock: Int get() = totalStock - reservedStock
+}

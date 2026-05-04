@@ -25,10 +25,7 @@ class CheckoutService(
         val user = userRepository.findByIdOrNull(userId)
             ?: throw BookingException(ErrorCode.USER_NOT_FOUND)
 
-        val remainingStock = inventoryRedisService.getStock(productId)
-            ?: inventoryRepository.findByProductId(productId)
-                ?.let { it.totalStock - it.reservedStock }
-            ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
+        val remainingStock = getRemainingStock(productId)
 
         return CheckoutResponse(
             product = CheckoutResponse.ProductInfo(
@@ -51,5 +48,13 @@ class CheckoutService(
             ),
             availablePaymentMethods = PaymentMethod.entries,
         )
+    }
+
+    private fun getRemainingStock(productId: Long): Int {
+        val redisStock = inventoryRedisService.getStock(productId)
+        if (redisStock != null) return redisStock
+
+        return inventoryRepository.findByProductId(productId)?.remainingStock
+            ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
     }
 }
