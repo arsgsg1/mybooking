@@ -29,11 +29,6 @@ class Order(
     @Column(nullable = false)
     var status: OrderStatus = OrderStatus.PENDING,
 
-    @Column(nullable = false)
-    val guestName: String,
-
-    val guestPhone: String? = null,
-
     @Column(name = "idempotency_key", nullable = false)
     val idempotencyKey: String,
 

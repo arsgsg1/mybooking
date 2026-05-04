@@ -10,6 +10,7 @@ import com.yun.mybooking.domain.payment.Payment
 import com.yun.mybooking.domain.payment.PaymentRepository
 import com.yun.mybooking.domain.product.Product
 import com.yun.mybooking.domain.product.ProductRepository
+import com.yun.mybooking.domain.user.UserRepository
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyService
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyState
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService
@@ -28,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional
 @Service
 class BookingService(
     private val productRepository: ProductRepository,
+    private val userRepository: UserRepository,
     private val inventoryRepository: InventoryRepository,
     private val orderRepository: OrderRepository,
     private val paymentRepository: PaymentRepository,
@@ -70,6 +72,9 @@ class BookingService(
     private fun executeBooking(idempotencyKey: String, request: BookingRequest): BookingResponse {
         val product = productRepository.findByIdOrNull(request.productId)
             ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
+
+        userRepository.findByIdOrNull(request.userId)
+            ?: throw BookingException(ErrorCode.USER_NOT_FOUND)
 
         if (orderRepository.existsByUserIdAndProductIdAndStatus(request.userId, request.productId, OrderStatus.CONFIRMED)) {
             throw BookingException(ErrorCode.ALREADY_PURCHASED)
@@ -122,8 +127,6 @@ class BookingService(
                 userId = request.userId,
                 productId = request.productId,
                 totalAmount = product.price,
-                guestName = request.guestName,
-                guestPhone = request.guestPhone,
                 idempotencyKey = idempotencyKey,
             )
         )

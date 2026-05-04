@@ -13,6 +13,8 @@ import com.yun.mybooking.domain.payment.PaymentRepository
 import com.yun.mybooking.domain.product.Product
 import com.yun.mybooking.domain.product.ProductRepository
 import com.yun.mybooking.domain.product.ProductStatus
+import com.yun.mybooking.domain.user.User
+import com.yun.mybooking.domain.user.UserRepository
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyService
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyState
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService
@@ -35,6 +37,7 @@ import java.util.Optional
 class BookingServiceTest {
 
     private val productRepository = mockk<ProductRepository>()
+    private val userRepository = mockk<UserRepository>()
     private val inventoryRepository = mockk<InventoryRepository>()
     private val orderRepository = mockk<OrderRepository>()
     private val paymentRepository = mockk<PaymentRepository>()
@@ -57,12 +60,19 @@ class BookingServiceTest {
         status = ProductStatus.ACTIVE,
     )
 
+    private val user = User(
+        id = 1L,
+        email = "alice@example.com",
+        name = "김앨리스",
+        phone = "010-1111-2222",
+        yPoints = 100000L,
+    )
+
     private val savedOrder = Order(
         id = 1L,
         userId = 1L,
         productId = 1L,
         totalAmount = 150000L,
-        guestName = "홍길동",
         idempotencyKey = "idem-key-001",
         status = OrderStatus.CONFIRMED,
     )
@@ -71,6 +81,7 @@ class BookingServiceTest {
     fun setUp() {
         bookingService = BookingService(
             productRepository,
+            userRepository,
             inventoryRepository,
             orderRepository,
             paymentRepository,
@@ -88,6 +99,7 @@ class BookingServiceTest {
         every { idempotencyService.getState(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
+        every { userRepository.findById(1L) } returns Optional.of(user)
         every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { orderRepository.save(any()) } returns savedOrder
@@ -110,6 +122,7 @@ class BookingServiceTest {
         every { idempotencyService.getState(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
+        every { userRepository.findById(1L) } returns Optional.of(user)
         every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.INSUFFICIENT_STOCK
         every { idempotencyService.release(idempotencyKey) } returns Unit
@@ -154,6 +167,7 @@ class BookingServiceTest {
         every { idempotencyService.getState(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
+        every { userRepository.findById(1L) } returns Optional.of(user)
         every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { inventoryRedisService.increment(1L) } returns Unit
@@ -179,6 +193,7 @@ class BookingServiceTest {
         every { idempotencyService.getState(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
+        every { userRepository.findById(1L) } returns Optional.of(user)
         every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns true
         every { idempotencyService.release(idempotencyKey) } returns Unit
 
@@ -196,12 +211,13 @@ class BookingServiceTest {
         every { idempotencyService.getState(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
+        every { userRepository.findById(1L) } returns Optional.of(user)
         every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { inventoryRedisService.increment(1L) } returns Unit
         every { orderRepository.save(any()) } returns Order(
             id = 1L, userId = 1L, productId = 1L, totalAmount = 150000L,
-            guestName = "홍길동", idempotencyKey = idempotencyKey, status = OrderStatus.FAILED,
+            idempotencyKey = idempotencyKey, status = OrderStatus.FAILED,
         )
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Failure(
             failedMethod = PaymentMethod.CREDIT_CARD,
@@ -228,8 +244,6 @@ class BookingServiceTest {
     private fun bookingRequest() = BookingRequest(
         productId = 1L,
         userId = 1L,
-        guestName = "홍길동",
-        guestPhone = "010-1234-5678",
         totalAmount = 150000L,
         payments = listOf(
             BookingRequest.PaymentItem(
