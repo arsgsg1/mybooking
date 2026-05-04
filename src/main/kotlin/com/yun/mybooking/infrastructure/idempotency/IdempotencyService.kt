@@ -6,7 +6,6 @@ import java.time.Duration
 
 sealed class IdempotencyState {
     object Processing : IdempotencyState()
-    data class Completed(val orderId: Long) : IdempotencyState()
 }
 
 @Service
@@ -16,22 +15,19 @@ class IdempotencyService(
     companion object {
         private const val KEY_PREFIX = "idempotency:"
         private const val PROCESSING = "PROCESSING"
-        private val TTL = Duration.ofHours(24)
+        private val TTL = Duration.ofMinutes(5)
     }
 
     fun tryAcquire(key: String): Boolean =
         redisTemplate.opsForValue().setIfAbsent(redisKey(key), PROCESSING, TTL) == true
 
     fun getState(key: String): IdempotencyState? {
-        val value = redisTemplate.opsForValue().get(redisKey(key)) ?: return null
-        return when (value) {
-            PROCESSING -> IdempotencyState.Processing
-            else -> IdempotencyState.Completed(value.toLong())
-        }
+        redisTemplate.opsForValue().get(redisKey(key)) ?: return null
+        return IdempotencyState.Processing
     }
 
-    fun complete(key: String, orderId: Long) {
-        redisTemplate.opsForValue().set(redisKey(key), orderId.toString(), TTL)
+    fun complete(key: String) {
+        redisTemplate.delete(redisKey(key))
     }
 
     fun release(key: String) {

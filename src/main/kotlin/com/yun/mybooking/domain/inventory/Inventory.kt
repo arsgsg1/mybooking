@@ -1,5 +1,7 @@
 package com.yun.mybooking.domain.inventory
 
+import com.yun.mybooking.common.exception.BookingException
+import com.yun.mybooking.common.exception.ErrorCode
 import jakarta.persistence.*
 
 @Entity
@@ -21,6 +23,10 @@ class Inventory(
     val remainingStock: Int get() = totalStock - reservedStock
 
     fun reserve() {
-        reservedStock += 1
+        if (reservedStock >= totalStock) {
+            throw BookingException(ErrorCode.SOLD_OUT)
+        } else {
+            reservedStock += 1
+        }
     }
 }

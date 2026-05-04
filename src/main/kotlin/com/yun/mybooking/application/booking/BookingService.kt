@@ -25,7 +25,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import org.springframework.transaction.PlatformTransactionManager
-import org.springframework.transaction.annotation.Transactional
 
 @Service
 class BookingService(
@@ -43,9 +42,8 @@ class BookingService(
     private val log = LoggerFactory.getLogger(javaClass)
 
     fun book(idempotencyKey: String, request: BookingRequest): BookingResponse {
-        when (val state = idempotencyService.getState(idempotencyKey)) {
+        when (idempotencyService.getState(idempotencyKey)) {
             is IdempotencyState.Processing -> return BookingResponse.pending()
-            is IdempotencyState.Completed -> return reconstructResponse(state.orderId)
             null -> Unit
         }
 
@@ -55,20 +53,11 @@ class BookingService(
 
         return runCatching {
             executeBooking(request)
-        }.onSuccess { response ->
-            idempotencyService.complete(idempotencyKey, response.bookingId!!)
+        }.onSuccess {
+            idempotencyService.complete(idempotencyKey)
         }.onFailure {
             idempotencyService.release(idempotencyKey)
         }.getOrThrow()
-    }
-
-    private fun reconstructResponse(orderId: Long): BookingResponse {
-        val order = orderRepository.findByIdOrNull(orderId)
-            ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
-        val product = productRepository.findByIdOrNull(order.productId)
-            ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
-        val payments = paymentRepository.findAllByOrderId(orderId)
-        return toResponse(order, product, payments)
     }
 
     private fun executeBooking(request: BookingRequest): BookingResponse {

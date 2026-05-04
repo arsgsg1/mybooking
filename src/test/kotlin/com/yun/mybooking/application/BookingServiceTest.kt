@@ -18,6 +18,8 @@ import com.yun.mybooking.domain.user.User
 import com.yun.mybooking.domain.user.UserRepository
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyService
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyState
+import com.yun.mybooking.infrastructure.idempotency.IdempotencyState.Processing
+import org.springframework.transaction.PlatformTransactionManager
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService.DecrementResult
 import com.yun.mybooking.infrastructure.payment.CompletedPayment
@@ -37,6 +39,7 @@ import java.util.Optional
 
 class BookingServiceTest {
 
+    private val txManager = mockk<PlatformTransactionManager>(relaxed = true)
     private val productRepository = mockk<ProductRepository>()
     private val userRepository = mockk<UserRepository>()
     private val inventoryRepository = mockk<InventoryRepository>()
@@ -87,6 +90,7 @@ class BookingServiceTest {
     @BeforeEach
     fun setUp() {
         bookingService = BookingService(
+            txManager,
             productRepository,
             userRepository,
             inventoryRepository,
@@ -115,7 +119,7 @@ class BookingServiceTest {
         )
         every { inventoryRepository.findByProductIdWithLock(1L) } returns inventory
         every { paymentRepository.save(any()) } returnsArgument 0
-        every { idempotencyService.complete(idempotencyKey, 1L) } returns Unit
+        every { idempotencyService.complete(idempotencyKey) } returns Unit
 
         val response = bookingService.book(idempotencyKey, bookingRequest())
 
@@ -142,17 +146,20 @@ class BookingServiceTest {
     }
 
     @Test
-    fun `중복 요청 - COMPLETED 상태면 DB에서 응답 재구성 후 반환`() {
+    fun `완료 후 재시도 - Redis 키 없음, DB에서 이미 구매 감지 시 ALREADY_PURCHASED`() {
         val idempotencyKey = "idem-key-003"
 
-        every { idempotencyService.getState(idempotencyKey) } returns IdempotencyState.Completed(1L)
-        every { orderRepository.findById(1L) } returns Optional.of(savedOrder)
+        every { idempotencyService.getState(idempotencyKey) } returns null
+        every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
-        every { paymentRepository.findAllByOrderId(1L) } returns emptyList()
+        every { userRepository.findById(1L) } returns Optional.of(user)
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns true
+        every { idempotencyService.release(idempotencyKey) } returns Unit
 
-        val response = bookingService.book(idempotencyKey, bookingRequest())
-
-        assert(response.bookingId == 1L)
+        val ex = assertThrows<BookingException> {
+            bookingService.book(idempotencyKey, bookingRequest())
+        }
+        assert(ex.errorCode == ErrorCode.ALREADY_PURCHASED)
         verify(exactly = 0) { inventoryRedisService.decrement(any()) }
     }
 
@@ -237,7 +244,7 @@ class BookingServiceTest {
         )
         every { inventoryRepository.findByProductIdWithLock(1L) } returns inventory
         every { paymentRepository.save(any()) } returnsArgument 0
-        every { idempotencyService.complete(idempotencyKey, 1L) } returns Unit
+        every { idempotencyService.complete(idempotencyKey) } returns Unit
 
         val response = bookingService.book(idempotencyKey, bookingRequest())
         assert(response.status == OrderStatus.CONFIRMED)
