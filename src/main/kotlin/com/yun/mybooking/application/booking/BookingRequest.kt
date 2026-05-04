@@ -7,8 +7,8 @@ import jakarta.validation.constraints.NotEmpty
 import jakarta.validation.constraints.Positive
 
 data class BookingRequest(
-    @field:NotBlank val productId: String,
-    @field:NotBlank val userId: String,
+    @field:Positive val productId: Long,
+    @field:Positive val userId: Long,
     @field:NotBlank val guestName: String,
     val guestPhone: String? = null,
     @field:Positive val totalAmount: Long,

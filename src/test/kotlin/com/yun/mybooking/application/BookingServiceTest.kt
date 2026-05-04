@@ -55,7 +55,7 @@ class BookingServiceTest {
     private lateinit var bookingService: BookingService
 
     private val product = Product(
-        id = "prod-001",
+        id = 1L,
         name = "테스트 스위트",
         price = 150000L,
         checkInDate = LocalDate.of(2026, 5, 10),
@@ -67,9 +67,9 @@ class BookingServiceTest {
     )
 
     private val savedOrder = Order(
-        id = "order-001",
-        userId = "user-001",
-        productId = "prod-001",
+        id = 1L,
+        userId = 1L,
+        productId = 1L,
         totalAmount = 150000L,
         guestName = "홍길동",
         idempotencyKey = "idem-key-001",
@@ -98,9 +98,9 @@ class BookingServiceTest {
 
         every { idempotencyService.getRecord(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
-        every { productRepository.findById("prod-001") } returns Optional.of(product)
-        every { orderRepository.existsByUserIdAndProductId("user-001", "prod-001") } returns false
-        every { inventoryRedisService.decrement("prod-001") } returns DecrementResult.SUCCESS
+        every { productRepository.findById(1L) } returns Optional.of(product)
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
+        every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { orderRepository.save(any()) } returns savedOrder
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Success(
             listOf(CompletedPayment(PaymentMethod.CREDIT_CARD, 150000L, "cc_tx_001"))
@@ -110,39 +110,35 @@ class BookingServiceTest {
 
         val response = bookingService.book(idempotencyKey, request)
 
-        assert(response.bookingId == "order-001")
+        assert(response.bookingId == 1L)
         assert(response.status == OrderStatus.CONFIRMED)
     }
 
     @Test
     fun `재고 소진 시 SOLD_OUT 예외 발생`() {
         val idempotencyKey = "idem-key-002"
-        val request = bookingRequest()
 
         every { idempotencyService.getRecord(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
-        every { productRepository.findById("prod-001") } returns Optional.of(product)
-        every { orderRepository.existsByUserIdAndProductId("user-001", "prod-001") } returns false
-        every { inventoryRedisService.decrement("prod-001") } returns DecrementResult.INSUFFICIENT_STOCK
+        every { productRepository.findById(1L) } returns Optional.of(product)
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
+        every { inventoryRedisService.decrement(1L) } returns DecrementResult.INSUFFICIENT_STOCK
         every { idempotencyService.fail(any(), any(), any()) } returns Unit
 
         val ex = assertThrows<BookingException> {
-            bookingService.book(idempotencyKey, request)
+            bookingService.book(idempotencyKey, bookingRequest())
         }
         assert(ex.errorCode == ErrorCode.SOLD_OUT)
     }
 
     @Test
-    fun `중복 요청 - COMPLETED 상태면 캐시된 응답 반환`() {
+    fun `중복 요청 - COMPLETED 상태면 캐시된 응답 반환하고 DB 미접근`() {
         val idempotencyKey = "idem-key-003"
-        val cachedResponse = bookingService.run {
-            // 직렬화된 BookingResponse JSON 준비
-        }
         val completedRecord = IdempotencyRecord(
             status = IdempotencyStatus.COMPLETED,
             result = objectMapper.writeValueAsString(
                 mapOf(
-                    "bookingId" to "order-001",
+                    "bookingId" to 1,
                     "status" to "CONFIRMED",
                     "productName" to "테스트 스위트",
                     "checkInDate" to "2026-05-10",
@@ -158,8 +154,9 @@ class BookingServiceTest {
 
         every { idempotencyService.getRecord(idempotencyKey) } returns completedRecord
 
-        // 두 번째 요청은 DB나 Redis를 전혀 건드리지 않아야 함
-        verify(exactly = 0) { productRepository.findById(any()) }
+        bookingService.book(idempotencyKey, bookingRequest())
+
+        verify(exactly = 0) { productRepository.findById(any<Long>()) }
     }
 
     @Test
@@ -179,14 +176,13 @@ class BookingServiceTest {
     @Test
     fun `결제 실패 시 재고 롤백`() {
         val idempotencyKey = "idem-key-005"
-        val request = bookingRequest()
 
         every { idempotencyService.getRecord(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
-        every { productRepository.findById("prod-001") } returns Optional.of(product)
-        every { orderRepository.existsByUserIdAndProductId("user-001", "prod-001") } returns false
-        every { inventoryRedisService.decrement("prod-001") } returns DecrementResult.SUCCESS
-        every { inventoryRedisService.increment("prod-001") } returns Unit
+        every { productRepository.findById(1L) } returns Optional.of(product)
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
+        every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
+        every { inventoryRedisService.increment(1L) } returns Unit
         every { orderRepository.save(any()) } returns savedOrder
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Failure(
             failedMethod = PaymentMethod.CREDIT_CARD,
@@ -195,10 +191,10 @@ class BookingServiceTest {
         every { idempotencyService.fail(any(), any(), any()) } returns Unit
 
         assertThrows<BookingException> {
-            bookingService.book(idempotencyKey, request)
+            bookingService.book(idempotencyKey, bookingRequest())
         }
 
-        verify(exactly = 1) { inventoryRedisService.increment("prod-001") }
+        verify(exactly = 1) { inventoryRedisService.increment(1L) }
     }
 
     @Test
@@ -207,8 +203,8 @@ class BookingServiceTest {
 
         every { idempotencyService.getRecord(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
-        every { productRepository.findById("prod-001") } returns Optional.of(product)
-        every { orderRepository.existsByUserIdAndProductId("user-001", "prod-001") } returns true
+        every { productRepository.findById(1L) } returns Optional.of(product)
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns true
         every { idempotencyService.fail(any(), any(), any()) } returns Unit
 
         val ex = assertThrows<BookingException> {
@@ -218,8 +214,8 @@ class BookingServiceTest {
     }
 
     private fun bookingRequest() = BookingRequest(
-        productId = "prod-001",
-        userId = "user-001",
+        productId = 1L,
+        userId = 1L,
         guestName = "홍길동",
         guestPhone = "010-1234-5678",
         totalAmount = 150000L,
@@ -227,6 +223,7 @@ class BookingServiceTest {
             BookingRequest.PaymentItem(
                 method = PaymentMethod.CREDIT_CARD,
                 amount = 150000L,
+                cardToken = "card_tok_test",
             )
         ),
     )

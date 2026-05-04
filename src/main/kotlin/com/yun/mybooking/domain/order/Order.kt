@@ -13,13 +13,14 @@ import java.time.LocalDateTime
 )
 class Order(
     @Id
-    val id: String,
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
 
     @Column(name = "user_id", nullable = false)
-    val userId: String,
+    val userId: Long,
 
     @Column(name = "product_id", nullable = false)
-    val productId: String,
+    val productId: Long,
 
     @Column(nullable = false)
     val totalAmount: Long,

@@ -7,10 +7,11 @@ import java.time.LocalDateTime
 @Table(name = "payments")
 class Payment(
     @Id
-    val id: String,
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
 
     @Column(name = "order_id", nullable = false)
-    val orderId: String,
+    val orderId: Long,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

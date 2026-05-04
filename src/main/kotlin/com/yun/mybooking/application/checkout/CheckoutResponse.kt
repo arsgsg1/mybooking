@@ -11,7 +11,7 @@ data class CheckoutResponse(
     val availablePaymentMethods: List<PaymentMethod>,
 ) {
     data class ProductInfo(
-        val id: String,
+        val id: Long,
         val name: String,
         val description: String?,
         val price: Long,
@@ -25,7 +25,7 @@ data class CheckoutResponse(
     )
 
     data class UserInfo(
-        val id: String,
+        val id: Long,
         val name: String,
         val availablePoints: Long,
     )

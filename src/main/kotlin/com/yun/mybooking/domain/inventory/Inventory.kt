@@ -6,10 +6,11 @@ import jakarta.persistence.*
 @Table(name = "inventories")
 class Inventory(
     @Id
-    val id: String,
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
 
     @Column(nullable = false, unique = true)
-    val productId: String,
+    val productId: Long,
 
     @Column(nullable = false)
     val totalStock: Int,

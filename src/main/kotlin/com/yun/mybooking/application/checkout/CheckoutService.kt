@@ -18,7 +18,7 @@ class CheckoutService(
     private val inventoryRedisService: InventoryRedisService,
 ) {
 
-    fun getCheckout(productId: String, userId: String): CheckoutResponse {
+    fun getCheckout(productId: Long, userId: Long): CheckoutResponse {
         val product = productRepository.findByIdOrNull(productId)
             ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
 

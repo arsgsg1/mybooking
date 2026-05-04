@@ -9,8 +9,8 @@ interface PaymentStrategy {
 }
 
 data class PaymentRequest(
-    val orderId: String,
-    val userId: String,
+    val orderId: Long,
+    val userId: Long,
     val amount: Long,
     val method: PaymentMethod,
     val cardToken: String? = null,

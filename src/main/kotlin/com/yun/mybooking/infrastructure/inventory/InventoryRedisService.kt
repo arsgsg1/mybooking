@@ -29,12 +29,12 @@ class InventoryRedisService(
 
     enum class DecrementResult { SUCCESS, INSUFFICIENT_STOCK, KEY_NOT_FOUND }
 
-    fun initInventory(productId: String, stock: Int) {
+    fun initInventory(productId: Long, stock: Int) {
         redisTemplate.opsForValue().set(key(productId), stock.toString())
         log.info("Redis 재고 초기화: productId={}, stock={}", productId, stock)
     }
 
-    fun decrement(productId: String, amount: Int = 1): DecrementResult {
+    fun decrement(productId: Long, amount: Int = 1): DecrementResult {
         val result = redisTemplate.execute(
             DECREMENT_SCRIPT,
             listOf(key(productId)),
@@ -47,12 +47,12 @@ class InventoryRedisService(
         }
     }
 
-    fun increment(productId: String, amount: Int = 1) {
+    fun increment(productId: Long, amount: Int = 1) {
         redisTemplate.opsForValue().increment(key(productId), amount.toLong())
     }
 
-    fun getStock(productId: String): Int? =
+    fun getStock(productId: Long): Int? =
         redisTemplate.opsForValue().get(key(productId))?.toIntOrNull()
 
-    private fun key(productId: String) = "$KEY_PREFIX$productId"
+    private fun key(productId: Long) = "$KEY_PREFIX$productId"
 }

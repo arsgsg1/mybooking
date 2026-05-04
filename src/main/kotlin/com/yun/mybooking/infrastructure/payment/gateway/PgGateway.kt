@@ -1,7 +1,7 @@
 package com.yun.mybooking.infrastructure.payment.gateway
 
 data class PgPaymentRequest(
-    val orderId: String,
+    val orderId: Long,
     val amount: Long,
     val token: String,
 )

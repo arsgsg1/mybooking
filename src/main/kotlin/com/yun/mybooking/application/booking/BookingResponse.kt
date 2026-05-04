@@ -8,7 +8,7 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 
 data class BookingResponse(
-    val bookingId: String,
+    val bookingId: Long,
     val status: OrderStatus,
     val productName: String,
     val checkInDate: LocalDate,

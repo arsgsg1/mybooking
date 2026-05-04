@@ -7,7 +7,7 @@ class InventoryRepositoryImpl(
     private val queryFactory: JPAQueryFactory,
 ) : InventoryRepositoryCustom {
 
-    override fun atomicReserve(productId: String, amount: Int): Long =
+    override fun atomicReserve(productId: Long, amount: Int): Long =
         queryFactory
             .update(inventory)
             .set(inventory.reservedStock, inventory.reservedStock.add(amount))
@@ -17,7 +17,7 @@ class InventoryRepositoryImpl(
             )
             .execute()
 
-    override fun atomicRelease(productId: String, amount: Int): Long =
+    override fun atomicRelease(productId: Long, amount: Int): Long =
         queryFactory
             .update(inventory)
             .set(inventory.reservedStock, inventory.reservedStock.subtract(amount))

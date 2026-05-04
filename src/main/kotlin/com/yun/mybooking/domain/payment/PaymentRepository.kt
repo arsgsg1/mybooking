@@ -2,7 +2,7 @@ package com.yun.mybooking.domain.payment
 
 import org.springframework.data.jpa.repository.JpaRepository
 
-interface PaymentRepository : JpaRepository<Payment, String> {
+interface PaymentRepository : JpaRepository<Payment, Long> {
 
-    fun findAllByOrderId(orderId: String): List<Payment>
+    fun findAllByOrderId(orderId: Long): List<Payment>
 }

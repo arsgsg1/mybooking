@@ -2,7 +2,7 @@ package com.yun.mybooking.domain.order
 
 import org.springframework.data.jpa.repository.JpaRepository
 
-interface OrderRepository : JpaRepository<Order, String> {
+interface OrderRepository : JpaRepository<Order, Long> {
 
-    fun existsByUserIdAndProductId(userId: String, productId: String): Boolean
+    fun existsByUserIdAndProductId(userId: Long, productId: Long): Boolean
 }

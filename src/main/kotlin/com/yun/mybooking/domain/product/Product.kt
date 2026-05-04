@@ -9,7 +9,8 @@ import java.time.LocalTime
 @Table(name = "products")
 class Product(
     @Id
-    val id: String,
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
 
     @Column(nullable = false)
     val name: String,

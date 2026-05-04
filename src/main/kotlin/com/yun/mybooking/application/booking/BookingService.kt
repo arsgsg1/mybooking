@@ -21,9 +21,9 @@ import com.yun.mybooking.infrastructure.payment.PaymentValidator
 import com.yun.mybooking.infrastructure.payment.ProcessResult
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker
 import org.slf4j.LoggerFactory
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.util.UUID
 
 @Service
 class BookingService(
@@ -67,8 +67,8 @@ class BookingService(
     }
 
     private fun executeBooking(idempotencyKey: String, request: BookingRequest): BookingResponse {
-        val product = productRepository.findById(request.productId)
-            .orElseThrow { BookingException(ErrorCode.PRODUCT_NOT_FOUND) }
+        val product = productRepository.findByIdOrNull(request.productId)
+            ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
 
         if (orderRepository.existsByUserIdAndProductId(request.userId, request.productId)) {
             throw BookingException(ErrorCode.ALREADY_PURCHASED)
@@ -76,7 +76,7 @@ class BookingService(
 
         val paymentRequests = request.payments.map { item ->
             PaymentRequest(
-                orderId = "",
+                orderId = 0L,
                 userId = request.userId,
                 amount = item.amount,
                 method = item.method,
@@ -96,7 +96,7 @@ class BookingService(
     }
 
     @CircuitBreaker(name = "redis-inventory", fallbackMethod = "reserveInventoryFallback")
-    fun reserveInventory(productId: String) {
+    fun reserveInventory(productId: Long) {
         when (inventoryRedisService.decrement(productId)) {
             DecrementResult.INSUFFICIENT_STOCK,
             DecrementResult.KEY_NOT_FOUND -> throw BookingException(ErrorCode.SOLD_OUT)
@@ -105,7 +105,7 @@ class BookingService(
     }
 
     @Suppress("unused")
-    fun reserveInventoryFallback(productId: String, ex: Exception) {
+    fun reserveInventoryFallback(productId: Long, ex: Exception) {
         log.warn("Redis 서킷브레이커 오픈 — DB fallback으로 재고 선점: productId={}", productId)
         val affected = inventoryRepository.atomicReserve(productId, 1)
         if (affected == 0L) throw BookingException(ErrorCode.SOLD_OUT)
@@ -118,11 +118,8 @@ class BookingService(
         product: Product,
         paymentRequests: List<PaymentRequest>,
     ): BookingResponse {
-        val orderId = UUID.randomUUID().toString()
-
         val order = orderRepository.save(
             Order(
-                id = orderId,
                 userId = request.userId,
                 productId = request.productId,
                 totalAmount = product.price,
@@ -132,7 +129,7 @@ class BookingService(
             )
         )
 
-        val requestsWithOrderId = paymentRequests.map { it.copy(orderId = orderId) }
+        val requestsWithOrderId = paymentRequests.map { it.copy(orderId = order.id) }
 
         when (val result = paymentProcessor.processAll(requestsWithOrderId)) {
             is ProcessResult.Failure -> {
@@ -143,17 +140,16 @@ class BookingService(
             is ProcessResult.Success -> {
                 order.confirm()
                 orderRepository.save(order)
-                val payments = savePayments(orderId, result.payments)
+                val payments = savePayments(order.id, result.payments)
                 return toResponse(order, product, payments)
             }
         }
     }
 
-    private fun savePayments(orderId: String, completed: List<CompletedPayment>): List<Payment> =
+    private fun savePayments(orderId: Long, completed: List<CompletedPayment>): List<Payment> =
         completed.map { cp ->
             paymentRepository.save(
                 Payment(
-                    id = UUID.randomUUID().toString(),
                     orderId = orderId,
                     method = cp.method,
                     amount = cp.amount,
