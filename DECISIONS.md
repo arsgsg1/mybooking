@@ -92,15 +92,15 @@
 ### 결정: Redis SETNX + DB UNIQUE 이중 보호
 
 ```
-첫 요청  → SETNX "PROCESSING" 성공 → 재고 선점 → 결제 → DB 저장 → orderId 기록
+첫 요청  → SETNX "PROCESSING" 성공 → 재고 선점 → 결제 → DB 저장 → DEL key
 재시도   → SETNX 실패 (키 존재)
            └─ "PROCESSING" → 200 PENDING 반환 (처리 중임을 클라이언트에 전달)
-           └─ orderId     → DB 재조회 → 동일 응답 반환
+완료 후 재시도 → 키 없음 → DB existsByUserIdAndProductId = true → ALREADY_PURCHASED
 ```
 
 **처리 중 응답을 200으로 반환하는 이유**: 클라이언트 입장에서 200를 받으면 성공으로 처리해 재시도를 멈출 수 있다. 200 PENDING은 "진행 중이니 잠시 기다려달라"는 의미이다.
 
-**Redis에 orderId를 저장하는 이유**: 완료된 요청의 재시도는 orderId로 DB를 재조회해 응답을 재구성한다. DB가 단일 진실 소스(Single Source of Truth)이므로 캐시와의 불일치가 발생하지 않고, 모수 자체가 적어 부하를 크게 고민하지 않아도 된다 판단.
+**완료 시 키를 삭제하는 이유**: 예약 완료 후 멱등키를 Redis에 남겨두면 TTL이 만료될 때까지 Redis 메모리를 점유한다. 완료된 요청의 재시도 감지는 DB의 `(user_id, product_id)` UNIQUE 제약으로 충분히 가능하다. DB가 단일 진실 소스이므로 완료 상태를 Redis에 중복 저장할 필요가 없다.
 
 **실패 시 키를 삭제하는 이유**: 일시적 오류(PG 타임아웃, Redis 순간 장애 등)로 실패한 요청은 재시도했을 때 성공해야 한다. 실패 결과를 캐싱하면 재시도가 영구적으로 차단된다. 키를 삭제하면 다음 요청이 새 트랜잭션으로 처음부터 시작된다.
 
@@ -152,26 +152,26 @@ interface PaymentStrategy {
 
 Redis가 다운되면 재고 선점(Lua DECR)이 불가능해져 서비스 전체가 중단된다.
 
-#### 선택지
+#### 결정: 역할 분리 — Redis(용량 체크) + SELECT FOR UPDATE(DB 정합성)
 
-| 방식 | 문제점 |
-|------|--------|
-| 낙관적 락 (`@Version`) | 동일 행에 대량 동시 UPDATE → 대부분 버전 충돌 → retry storm → DB 부하 폭증 |
-| 비관적 락 (`SELECT FOR UPDATE`) | 락 보유 시간 동안 전체 직렬화 → 처리량 급감, 커넥션 점유 증가 |
-| **원자적 조건부 UPDATE** | 단일 쿼리로 원자성 보장, retry 불필요 |
+재고 관련 로직을 두 단계로 분리했다.
 
-#### 결정: 원자적 조건부 UPDATE (QueryDSL)
+**1단계: 용량 체크 (트랜잭션 외부)**
 
-```sql
-UPDATE inventories
-SET reserved_stock = reserved_stock + 1
-WHERE product_id = ?
-  AND (total_stock - reserved_stock) >= 1
+| 경로 | 방식 | 역할 |
+|------|------|------|
+| 정상 (Redis 가용) | Lua DECR 원자적 실행 | 재고 초과 요청을 DB 진입 전에 조기 거부 |
+| 장애 (Circuit Breaker 오픈) | `SELECT remainingStock` 소프트 체크 | 근사치 기반 통과 여부 판단 (비원자적, 약간의 경쟁 허용) |
+
+**2단계: DB 실제 차감 (트랜잭션 내부, 항상 실행)**
+
+```kotlin
+// processOrderAndPayment 내부 @Transactional
+val inventory = inventoryRepository.findByProductIdWithLock(productId) // SELECT FOR UPDATE
+inventory.reserve()  // reservedStock += 1, 초과 시 SOLD_OUT
 ```
 
-InnoDB는 단일 UPDATE에서 내부적으로 행 레벨 락을 획득하므로 원자성이 보장된다. `affected rows = 1`이면 성공, `0`이면 재고 소진으로 즉시 판단하며 애플리케이션 레벨 retry가 필요 없다.
-
-Resilience4j Circuit Breaker가 Redis 연속 실패를 감지해 자동으로 이 경로로 전환한다.
+`SELECT FOR UPDATE`로 해당 행에 비관적 락을 걸고 `reserved_stock`을 증가시킨다. 낙관적 락 (`@Version`)은 동일 행 대량 충돌 시 retry storm이 발생할 수 있어 선택하지 않았다. 비관적 락은 락 보유 시간이 길면 처리량에 영향을 주지만, DB에 도달하는 요청은 최대 10건이므로 경합이 거의 없어 실질적 영향이 없다.
 
 ```yaml
 resilience4j.circuitbreaker.instances.redis-inventory:
@@ -181,27 +181,44 @@ resilience4j.circuitbreaker.instances.redis-inventory:
   minimum-number-of-calls: 5
 ```
 
-**트레이드오프**: Redis 장애 시 재고 선점이 DB로 내려오므로 DB 부하가 증가한다. 다만 Redis 장애 자체가 이미 비정상 상황이며, 가용성(장애 시에도 예약 처리 계속)을 선택했다. Redis가 복구되면 서킷이 half-open → closed로 복귀한다.
+**트레이드오프**: Redis 장애 시 fallback의 소프트 체크는 비원자적이라 극히 일부 요청이 동시에 통과할 수 있다. 그러나 2단계 `SELECT FOR UPDATE`가 최종 방어선으로 실제 초과 차감을 막는다. 만약 결제가 먼저 성공한 뒤 `reserve()`가 SOLD_OUT을 던지면 `PaymentProcessor.rollback()`으로 즉시 환불한다. Redis 장애 자체가 이미 비정상 상황이며, 가용성(장애 시에도 예약 처리 계속)을 선택했다. Redis가 복구되면 서킷이 half-open → closed로 복귀한다.
 
 ---
 
 ### 4-b. 결제 실패 케이스 대응
 
-#### 결제 실패 시 처리 흐름
+#### 실패 케이스별 처리 흐름
+
+**케이스 1: 결제 실패 (`processAll` 내부 실패)**
 
 ```
 PaymentProcessor.processAll() 실패
 │
-├─ 1. 이미 성공한 외부 PG 결제를 역순으로 환불 (rollbackAll)
+├─ 1. 이미 성공한 외부 PG 결제를 역순으로 환불 (PaymentProcessor 내부 rollbackAll)
 │      └─ Y포인트는 @Transactional 롤백으로 자동 복구 (별도 환불 호출 불필요)
 │
-├─ 2. 재고 복구: InventoryRedisService.increment(productId)
+├─ 2. @Transactional 롤백: Order, Payment 모두 DB 미저장
 │
-├─ 3. @Transactional 롤백: Order, Payment 모두 DB 미저장
-│      └─ FAILED 상태의 주문이 DB에 남지 않음
+├─ 3. 재고 복구: InventoryRedisService.increment(productId)
 │
 └─ 4. 멱등키 release (Redis key 삭제): 클라이언트 재시도 허용
 ```
+
+**케이스 2: 결제 성공 후 `reserve()` 실패 (주로 fallback 경쟁 상황)**
+
+```
+processAll() 성공 → reserve() SOLD_OUT
+│
+├─ 1. PaymentProcessor.rollback(completedPayments): 완료된 결제 역순 환불
+│
+├─ 2. @Transactional 롤백: Order DB 미저장
+│
+├─ 3. 재고 복구: InventoryRedisService.increment(productId)
+│
+└─ 4. 멱등키 release: 클라이언트 재시도 허용
+```
+
+`PaymentProcessor.rollback()`은 케이스 2에서 외부에서 직접 호출하기 위해 public으로 분리된 메서드다. 케이스 1의 내부 `rollbackAll()`과 동일한 역할을 하되 `List<CompletedPayment>`를 입력으로 받는다.
 
 #### FAILED 주문을 DB에 저장하지 않는 이유
 

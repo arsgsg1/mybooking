@@ -20,8 +20,8 @@ import com.yun.mybooking.infrastructure.idempotency.IdempotencyService
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyState
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyState.Processing
 import org.springframework.transaction.PlatformTransactionManager
+import com.yun.mybooking.infrastructure.inventory.DecrementResult
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService
-import com.yun.mybooking.infrastructure.inventory.InventoryRedisService.DecrementResult
 import com.yun.mybooking.infrastructure.payment.CompletedPayment
 import com.yun.mybooking.infrastructure.payment.PaymentProcessor
 import com.yun.mybooking.infrastructure.payment.PaymentValidator

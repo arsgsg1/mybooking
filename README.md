@@ -119,6 +119,13 @@ src/main/kotlin/com/yun/mybooking/
 │   ├── ApiResponse               # 공통 응답 래퍼 {success, data, error}
 │   └── GlobalExceptionHandler    # BookingException → HTTP 에러 변환
 │
+├── common/                       # 공통 유틸리티
+│   ├── exception/
+│   │   ├── BookingException      # 도메인 예외 (errorCode + message)
+│   │   └── ErrorCode             # HTTP 상태 코드와 메시지 매핑
+│   └── util/
+│       └── Transaction           # PlatformTransactionManager 확장 함수
+│
 ├── application/                  # 유스케이스 오케스트레이션
 │   ├── booking/
 │   │   ├── BookingService        # 멱등성 제어, 재고 선점, 결제, 주문 저장
@@ -145,10 +152,14 @@ src/main/kotlin/com/yun/mybooking/
 │   └── payment/
 │       ├── PaymentProcessor      # 결제 수단 정렬 → 순차 처리 → 실패 시 롤백
 │       ├── PaymentValidator      # 조합 규칙 및 금액 합산 검증
-│       ├── PaymentStrategy       # 결제 전략 인터페이스
+│       ├── PaymentStrategy       # 결제 전략 인터페이스 (PaymentRequest/Result/RefundResult 포함)
+│       ├── gateway/
+│       │   ├── PgGateway                  # PG 연동 인터페이스 + DTO
+│       │   ├── CreditCardGatewayClient    # 신용카드 PG Stub
+│       │   └── YPayGatewayClient          # YPay PG Stub
 │       └── strategy/
-│           ├── CreditCardPaymentStrategy  → CreditCardGatewayClient (Stub)
-│           ├── YPayPaymentStrategy        → YPayGatewayClient (Stub)
+│           ├── CreditCardPaymentStrategy  → CreditCardGatewayClient
+│           ├── YPayPaymentStrategy        → YPayGatewayClient
 │           └── YPointsPaymentStrategy     → DB 포인트 차감
 │
 └── config/
@@ -205,15 +216,25 @@ sequenceDiagram
     Note over BS: @Transactional 시작
     BS->>DB: INSERT orders (PENDING)
     BS->>PG: 결제 요청 (CC → YPay → YPoints 순)
-    alt 결제 성공
+    alt 결제 성공 + reserve() 성공
         PG-->>BS: transactionId
-        BS->>DB: INSERT payments (COMPLETED)
         BS->>DB: UPDATE orders → CONFIRMED
         BS->>DB: SELECT FOR UPDATE inventories → reserve() (reserved_stock += 1)
+        BS->>DB: INSERT payments (COMPLETED)
         Note over BS: @Transactional 커밋
         BS->>IS: complete(key)
         IS->>Redis: DEL key
         BS-->>C: 200 OK (CONFIRMED)
+    else 결제 성공 + reserve() 실패 (재고 초과)
+        PG-->>BS: transactionId
+        BS->>DB: UPDATE orders → CONFIRMED
+        BS->>DB: SELECT FOR UPDATE inventories → SOLD_OUT
+        BS->>PG: rollback (완료된 결제 역순 환불)
+        Note over BS: @Transactional 롤백 (order 미저장)
+        BS->>Redis: INCR inventory:{productId} (재고 복구)
+        BS->>IS: release(key)
+        IS->>Redis: DEL key (재시도 허용)
+        BS-->>C: 409 SOLD_OUT
     else 결제 실패
         PG-->>BS: failureReason
         Note over BS: @Transactional 롤백 (order/payment 미저장)

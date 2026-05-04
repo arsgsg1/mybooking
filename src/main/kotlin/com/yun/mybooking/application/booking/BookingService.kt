@@ -13,8 +13,8 @@ import com.yun.mybooking.domain.product.ProductRepository
 import com.yun.mybooking.domain.user.UserRepository
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyService
 import com.yun.mybooking.infrastructure.idempotency.IdempotencyState
+import com.yun.mybooking.infrastructure.inventory.DecrementResult
 import com.yun.mybooking.infrastructure.inventory.InventoryRedisService
-import com.yun.mybooking.infrastructure.inventory.InventoryRedisService.DecrementResult
 import com.yun.mybooking.infrastructure.payment.CompletedPayment
 import com.yun.mybooking.infrastructure.payment.PaymentProcessor
 import com.yun.mybooking.infrastructure.payment.PaymentRequest
@@ -130,9 +130,14 @@ class BookingService(
                 is ProcessResult.Success -> {
                     order.confirm()
                     orderRepository.save(order)
-                    val inventory = inventoryRepository.findByProductIdWithLock(request.productId)
-                        ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
-                    inventory.reserve()
+                    runCatching {
+                        val inventory = inventoryRepository.findByProductIdWithLock(request.productId)
+                            ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
+                        inventory.reserve()
+                    }.onFailure {
+                        paymentProcessor.rollback(result.payments)
+                        throw it
+                    }.getOrThrow()
                     val payments = savePayments(order.id, result.payments)
                     toResponse(order, product, payments)
                 }
