@@ -2,6 +2,7 @@ package com.yun.mybooking.application.booking
 
 import com.yun.mybooking.common.exception.BookingException
 import com.yun.mybooking.common.exception.ErrorCode
+import com.yun.mybooking.common.util.transactional
 import com.yun.mybooking.domain.inventory.InventoryRepository
 import com.yun.mybooking.domain.order.Order
 import com.yun.mybooking.domain.order.OrderRepository
@@ -23,10 +24,12 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Transactional
 
 @Service
 class BookingService(
+    private val txManager: PlatformTransactionManager,
     private val productRepository: ProductRepository,
     private val userRepository: UserRepository,
     private val inventoryRepository: InventoryRepository,
@@ -115,34 +118,35 @@ class BookingService(
         if (inventory.remainingStock <= 0) throw BookingException(ErrorCode.SOLD_OUT)
     }
 
-    @Transactional
     fun processOrderAndPayment(
         request: BookingRequest,
         product: Product,
         paymentRequests: List<PaymentRequest>,
     ): BookingResponse {
-        val order = orderRepository.save(
-            Order(
-                userId = request.userId,
-                productId = request.productId,
-                totalAmount = product.price,
+        return txManager.transactional {
+            val order = orderRepository.save(
+                Order(
+                    userId = request.userId,
+                    productId = request.productId,
+                    totalAmount = product.price,
+                )
             )
-        )
 
-        val requestsWithOrderId = paymentRequests.map { it.copy(orderId = order.id) }
+            val requestsWithOrderId = paymentRequests.map { it.copy(orderId = order.id) }
 
-        when (val result = paymentProcessor.processAll(requestsWithOrderId)) {
-            is ProcessResult.Failure -> {
-                throw BookingException(ErrorCode.PAYMENT_FAILED, result.failureReason)
-            }
-            is ProcessResult.Success -> {
-                order.confirm()
-                orderRepository.save(order)
-                val inventory = inventoryRepository.findByProductIdWithLock(request.productId)
-                    ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
-                inventory.reserve()
-                val payments = savePayments(order.id, result.payments)
-                return toResponse(order, product, payments)
+            when (val result = paymentProcessor.processAll(requestsWithOrderId)) {
+                is ProcessResult.Failure -> {
+                    throw BookingException(ErrorCode.PAYMENT_FAILED, result.failureReason)
+                }
+                is ProcessResult.Success -> {
+                    order.confirm()
+                    orderRepository.save(order)
+                    val inventory = inventoryRepository.findByProductIdWithLock(request.productId)
+                        ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
+                    inventory.reserve()
+                    val payments = savePayments(order.id, result.payments)
+                    toResponse(order, product, payments)
+                }
             }
         }
     }

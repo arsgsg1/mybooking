@@ -16,4 +16,5 @@ enum class ErrorCode(val status: HttpStatus, val message: String) {
     MISSING_IDEMPOTENCY_KEY(HttpStatus.BAD_REQUEST, "X-Idempotency-Key 헤더가 필요합니다."),
 
     PAYMENT_FAILED(HttpStatus.UNPROCESSABLE_ENTITY, "결제에 실패하였습니다."),
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "알 수 없는 에러가 발생했습니다.")
 }
