@@ -73,7 +73,6 @@ class BookingServiceTest {
         userId = 1L,
         productId = 1L,
         totalAmount = 150000L,
-        idempotencyKey = "idem-key-001",
         status = OrderStatus.CONFIRMED,
     )
 
@@ -100,7 +99,7 @@ class BookingServiceTest {
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
         every { userRepository.findById(1L) } returns Optional.of(user)
-        every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { orderRepository.save(any()) } returns savedOrder
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Success(
@@ -123,7 +122,7 @@ class BookingServiceTest {
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
         every { userRepository.findById(1L) } returns Optional.of(user)
-        every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.INSUFFICIENT_STOCK
         every { idempotencyService.release(idempotencyKey) } returns Unit
 
@@ -168,7 +167,7 @@ class BookingServiceTest {
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
         every { userRepository.findById(1L) } returns Optional.of(user)
-        every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { inventoryRedisService.increment(1L) } returns Unit
         every { orderRepository.save(any()) } returns savedOrder
@@ -194,7 +193,7 @@ class BookingServiceTest {
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
         every { userRepository.findById(1L) } returns Optional.of(user)
-        every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns true
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns true
         every { idempotencyService.release(idempotencyKey) } returns Unit
 
         val ex = assertThrows<BookingException> {
@@ -207,18 +206,14 @@ class BookingServiceTest {
     fun `결제 실패 후 동일 멱등키로 재시도 시 새 요청으로 처리`() {
         val idempotencyKey = "idem-key-007"
 
-        // 1차: 결제 실패
         every { idempotencyService.getState(idempotencyKey) } returns null
         every { idempotencyService.tryAcquire(idempotencyKey) } returns true
         every { productRepository.findById(1L) } returns Optional.of(product)
         every { userRepository.findById(1L) } returns Optional.of(user)
-        every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
+        every { orderRepository.existsByUserIdAndProductId(1L, 1L) } returns false
         every { inventoryRedisService.decrement(1L) } returns DecrementResult.SUCCESS
         every { inventoryRedisService.increment(1L) } returns Unit
-        every { orderRepository.save(any()) } returns Order(
-            id = 1L, userId = 1L, productId = 1L, totalAmount = 150000L,
-            idempotencyKey = idempotencyKey, status = OrderStatus.FAILED,
-        )
+        every { orderRepository.save(any()) } returns savedOrder
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Failure(
             failedMethod = PaymentMethod.CREDIT_CARD,
             failureReason = "한도 초과",
@@ -227,13 +222,10 @@ class BookingServiceTest {
 
         assertThrows<BookingException> { bookingService.book(idempotencyKey, bookingRequest()) }
 
-        // 2차 재시도: null 반환 (release 후 키 없음) → 신규 처리
-        every { idempotencyService.getState(idempotencyKey) } returns null
-        every { orderRepository.existsByUserIdAndProductIdAndStatus(1L, 1L, OrderStatus.CONFIRMED) } returns false
+        // 2차 재시도: release 후 키 없음 → 신규 처리
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Success(
             listOf(CompletedPayment(PaymentMethod.CREDIT_CARD, 150000L, "cc_tx_002"))
         )
-        every { orderRepository.save(any()) } returns savedOrder
         every { paymentRepository.save(any()) } returnsArgument 0
         every { idempotencyService.complete(idempotencyKey, 1L) } returns Unit
 

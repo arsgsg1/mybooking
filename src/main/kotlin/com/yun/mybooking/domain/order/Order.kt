@@ -7,7 +7,6 @@ import java.time.LocalDateTime
 @Table(
     name = "orders",
     uniqueConstraints = [
-        UniqueConstraint(name = "uq_orders_idempotency_key", columnNames = ["idempotency_key"]),
         UniqueConstraint(name = "uq_orders_user_product", columnNames = ["user_id", "product_id"]),
     ]
 )
@@ -29,9 +28,6 @@ class Order(
     @Column(nullable = false)
     var status: OrderStatus = OrderStatus.PENDING,
 
-    @Column(name = "idempotency_key", nullable = false)
-    val idempotencyKey: String,
-
     @Column(nullable = false, updatable = false)
     val createdAt: LocalDateTime = LocalDateTime.now(),
 
@@ -39,11 +35,6 @@ class Order(
 ) {
     fun confirm() {
         status = OrderStatus.CONFIRMED
-        updatedAt = LocalDateTime.now()
-    }
-
-    fun fail() {
-        status = OrderStatus.FAILED
         updatedAt = LocalDateTime.now()
     }
 }

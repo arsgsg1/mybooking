@@ -5,7 +5,6 @@ import com.yun.mybooking.common.exception.ErrorCode
 import com.yun.mybooking.domain.inventory.InventoryRepository
 import com.yun.mybooking.domain.order.Order
 import com.yun.mybooking.domain.order.OrderRepository
-import com.yun.mybooking.domain.order.OrderStatus
 import com.yun.mybooking.domain.payment.Payment
 import com.yun.mybooking.domain.payment.PaymentRepository
 import com.yun.mybooking.domain.product.Product
@@ -76,7 +75,7 @@ class BookingService(
         userRepository.findByIdOrNull(request.userId)
             ?: throw BookingException(ErrorCode.USER_NOT_FOUND)
 
-        if (orderRepository.existsByUserIdAndProductIdAndStatus(request.userId, request.productId, OrderStatus.CONFIRMED)) {
+        if (orderRepository.existsByUserIdAndProductId(request.userId, request.productId)) {
             throw BookingException(ErrorCode.ALREADY_PURCHASED)
         }
 
@@ -93,7 +92,7 @@ class BookingService(
         reserveInventory(request.productId)
 
         return runCatching {
-            processOrderAndPayment(idempotencyKey, request, product, paymentRequests)
+            processOrderAndPayment(request, product, paymentRequests)
         }.onFailure {
             inventoryRedisService.increment(request.productId)
         }.getOrThrow()
@@ -117,7 +116,6 @@ class BookingService(
 
     @Transactional
     fun processOrderAndPayment(
-        idempotencyKey: String,
         request: BookingRequest,
         product: Product,
         paymentRequests: List<PaymentRequest>,
@@ -127,7 +125,6 @@ class BookingService(
                 userId = request.userId,
                 productId = request.productId,
                 totalAmount = product.price,
-                idempotencyKey = idempotencyKey,
             )
         )
 
@@ -135,8 +132,6 @@ class BookingService(
 
         when (val result = paymentProcessor.processAll(requestsWithOrderId)) {
             is ProcessResult.Failure -> {
-                order.fail()
-                orderRepository.save(order)
                 throw BookingException(ErrorCode.PAYMENT_FAILED, result.failureReason)
             }
             is ProcessResult.Success -> {
