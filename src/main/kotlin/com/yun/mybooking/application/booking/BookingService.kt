@@ -41,19 +41,19 @@ class BookingService(
 
     fun book(idempotencyKey: String, request: BookingRequest): BookingResponse {
         when (val state = idempotencyService.getState(idempotencyKey)) {
-            is IdempotencyState.Processing -> throw BookingException(ErrorCode.IDEMPOTENCY_PROCESSING)
+            is IdempotencyState.Processing -> return BookingResponse.pending()
             is IdempotencyState.Completed -> return reconstructResponse(state.orderId)
             null -> Unit
         }
 
         if (!idempotencyService.tryAcquire(idempotencyKey)) {
-            throw BookingException(ErrorCode.IDEMPOTENCY_PROCESSING)
+            return BookingResponse.pending()
         }
 
         return runCatching {
             executeBooking(idempotencyKey, request)
         }.onSuccess { response ->
-            idempotencyService.complete(idempotencyKey, response.bookingId)
+            idempotencyService.complete(idempotencyKey, response.bookingId!!)
         }.onFailure {
             idempotencyService.release(idempotencyKey)
         }.getOrThrow()

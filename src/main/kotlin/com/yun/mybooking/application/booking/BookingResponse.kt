@@ -8,16 +8,16 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 
 data class BookingResponse(
-    val bookingId: Long,
+    val bookingId: Long?,
     val status: OrderStatus,
-    val productName: String,
-    val checkInDate: LocalDate,
-    val checkOutDate: LocalDate,
-    val checkInTime: LocalTime,
-    val checkOutTime: LocalTime,
-    val totalAmount: Long,
+    val productName: String?,
+    val checkInDate: LocalDate?,
+    val checkOutDate: LocalDate?,
+    val checkInTime: LocalTime?,
+    val checkOutTime: LocalTime?,
+    val totalAmount: Long?,
     val payments: List<PaymentInfo>,
-    val createdAt: LocalDateTime,
+    val createdAt: LocalDateTime?,
 ) {
     data class PaymentInfo(
         val method: PaymentMethod,
@@ -25,4 +25,19 @@ data class BookingResponse(
         val status: PaymentStatus,
         val transactionId: String?,
     )
+
+    companion object {
+        fun pending() = BookingResponse(
+            bookingId = null,
+            status = OrderStatus.PENDING,
+            productName = null,
+            checkInDate = null,
+            checkOutDate = null,
+            checkInTime = null,
+            checkOutTime = null,
+            totalAmount = null,
+            payments = emptyList(),
+            createdAt = null,
+        )
+    }
 }

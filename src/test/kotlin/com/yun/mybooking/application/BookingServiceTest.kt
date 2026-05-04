@@ -4,6 +4,7 @@ import com.yun.mybooking.application.booking.BookingRequest
 import com.yun.mybooking.application.booking.BookingService
 import com.yun.mybooking.common.exception.BookingException
 import com.yun.mybooking.common.exception.ErrorCode
+
 import com.yun.mybooking.domain.inventory.InventoryRepository
 import com.yun.mybooking.domain.order.Order
 import com.yun.mybooking.domain.order.OrderRepository
@@ -148,15 +149,15 @@ class BookingServiceTest {
     }
 
     @Test
-    fun `동일 요청 처리 중 - PROCESSING 상태면 409 예외 발생`() {
+    fun `동일 요청 처리 중 - PROCESSING 상태면 PENDING 응답 반환`() {
         val idempotencyKey = "idem-key-004"
 
         every { idempotencyService.getState(idempotencyKey) } returns IdempotencyState.Processing
 
-        val ex = assertThrows<BookingException> {
-            bookingService.book(idempotencyKey, bookingRequest())
-        }
-        assert(ex.errorCode == ErrorCode.IDEMPOTENCY_PROCESSING)
+        val response = bookingService.book(idempotencyKey, bookingRequest())
+
+        assert(response.status == OrderStatus.PENDING)
+        assert(response.bookingId == null)
     }
 
     @Test

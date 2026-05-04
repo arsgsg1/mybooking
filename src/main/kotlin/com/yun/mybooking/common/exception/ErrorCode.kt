@@ -9,7 +9,6 @@ enum class ErrorCode(val status: HttpStatus, val message: String) {
 
     SOLD_OUT(HttpStatus.CONFLICT, "상품이 매진되었습니다."),
     ALREADY_PURCHASED(HttpStatus.CONFLICT, "이미 구매한 상품입니다."),
-    IDEMPOTENCY_PROCESSING(HttpStatus.CONFLICT, "동일한 요청이 처리 중입니다."),
 
     INVALID_PAYMENT_COMBINATION(HttpStatus.BAD_REQUEST, "사용할 수 없는 결제 수단 조합입니다."),
     INSUFFICIENT_POINTS(HttpStatus.BAD_REQUEST, "Y포인트 잔액이 부족합니다."),
