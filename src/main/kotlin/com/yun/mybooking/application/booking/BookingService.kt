@@ -51,7 +51,7 @@ class BookingService(
         }
 
         return runCatching {
-            executeBooking(idempotencyKey, request)
+            executeBooking(request)
         }.onSuccess { response ->
             idempotencyService.complete(idempotencyKey, response.bookingId!!)
         }.onFailure {
@@ -68,7 +68,7 @@ class BookingService(
         return toResponse(order, product, payments)
     }
 
-    private fun executeBooking(idempotencyKey: String, request: BookingRequest): BookingResponse {
+    private fun executeBooking(request: BookingRequest): BookingResponse {
         val product = productRepository.findByIdOrNull(request.productId)
             ?: throw BookingException(ErrorCode.PRODUCT_NOT_FOUND)
 
