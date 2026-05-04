@@ -1,121 +1,126 @@
 # DECISIONS.md — 기술적 쟁점과 의사결정
 
+설계 과정에서 고민한 트레이드오프와 선택의 근거를 기록한다.
+
 ---
 
-## 1. 재고 정합성 — Redis Lua 스크립트 원자적 감소
+## 1. TPS 급증 대응 — 시스템 붕괴 방지 구조
+
+### 1-a. 현재 구조: 평시 50 TPS, 프로모션 시 순간 500~1,000 TPS
+
+#### 핵심 관찰
+
+초특가 숙소 상품 (10개 한정) -> 한 숙소 상품의 재고가 10개라는 의미로 해석.
+
+현재 구조에서 스케일 아웃이 불가능한 자원인 DB에 트래픽이 꽂히는게 병목 지점이라고 판단.
+
+500~1,000 TPS가 유입되더라도 성공할 수 있는 요청은 10건에 불과하다. 나머지 490~990 TPS는 모두 거부 대상이다. 따라서 이 거부를 얼마나 빠르고 가볍게 처리하느냐가 DB 부하를 결정한다.
+
+#### 구조별 역할
+
+| 계층 | 구조                                 | 역할                                                                        |
+|------|------------------------------------|---------------------------------------------------------------------------|
+| Redis | Lua 스크립트 원자적 DECR                  | 재고 소진 여부를 DB 접근 없이 즉시 판단, 초과 요청 조기 거부                                     |
+| Redis | 멱등성 SETNX                          | 재시도·중복 요청이 DB에 도달하기 전 차단                                                  |
+| DB | `(user_id, product_id)` UNIQUE 인덱스 | 한 사용자가 두 상품을 선점하는 시나리오를 DB 레벨에서 차단                                        |
+| App | `InventoryInitializer`             | 개발 산출물 검증 편의를 위해 앱 기동 시 DB 재고를 Redis에 동기화하여 Redis 키 미존재(cold start) 상황 방지 |
+| App | Resilience4j Circuit Breaker       | Redis 연속 실패 시 자동으로 DB fallback 경로 전환                                      |
+
+#### 트래픽 흐름
+
+```
+500~1,000 TPS 유입
+│
+├─ Redis Lua DECR
+│   ├─ 재고 소진 후 (490~990 TPS) ──► 즉시 SOLD_OUT 반환 (DB 미접근)
+│   └─ 재고 있는 초기 10건 ──────────► DB 트랜잭션 진행
+│
+└─ 멱등성 SETNX
+    └─ 동일 키 재시도 ────────────────► 즉시 200 PENDING 반환 (DB 미접근)
+```
+
+결과적으로 DB에 도달하는 요청은 최대 10건이며, DB 커넥션 풀은 스파이크의 직접적인 영향을 받지 않는다.
+
+---
+
+### 1-b. 메시지큐 도입을 고려했으나 도입하지 않은 이유
+
+스파이크 트래픽을 메시지큐로 받아 컨슈머가 순차 처리하는 방식을 검토했다. 도입하지 않은 근거는 다음과 같다.
+
+**① 재고 수가 병목을 결정한다**
+
+메시지큐로 요청을 받아도 처리 완료 가능한 건수는 10건이다. 나머지는 컨슈머 단계에서 재고 소진으로 거부된다. 큐에 쌓이는 비용을 치르고도 얻는 이득이 없다.
+
+**② 스파이크 지속 시간이 짧다**
+
+메시지큐는 지속적인 고부하를 시간 축으로 평탄화하는 데 적합하다. 1~5분짜리 스파이크는 Redis 조기 거부로 충분히 흡수된다. 이미 재고 10건 외의 모든 요청은 Redis 단계에서 즉시 거부되므로 DB 부하 자체가 스파이크와 무관하다.
+
+**③ 선착순 UX와 비동기 응답의 충돌**
+
+선착순 특성상 클라이언트는 "지금 이 순간 성공/실패"를 즉시 알아야 한다. 메시지큐를 도입하면 결과를 비동기로 수신해야 하며, 이를 위해 폴링 API 또는 웹소켓이 추가로 필요하다. 이는 클라이언트 복잡도 증가와 응답 지연으로 이어진다.
+
+**④ 운영 비용 대비 효과**
+
+메시지큐를 도입하는건 운영 요소 (데드레터 처리, 메시지 보존 정책, 별도 컨슈머 운영)가 추가되어 현재 규모 대비 오버헤드라 판단. Redis 기반의 현재 구조가 동일한 문제를 더 단순하게 해결한다.
+
+**메시지큐를 재고려할 시점**: 평시 트래픽 자체가 수천 TPS로 올라가 Redis 조기 거부 이후에도 DB에 도달하는 유효 요청이 지속적으로 많아질 때.
+
+---
+
+### 1-c. 향후 평시 트래픽이 500~1,000 TPS가 된다면
+
+이 경우는 성격이 다르다. 스파이크가 아닌 상시 고부하로, 유효 예약 요청 자체가 많아진다는 의미다. (단일 프로모션 상품 10개가 아니라 상품 수와 재고가 대규모로 늘어난 상황을 전제한다.)
+
+상시 고부하가 검증되면 메시지큐 도입 재검토. 예약 요청을 큐로 받아 컨슈머가 처리하는 구조로 전환하되, 응답 방식을 비동기(폴링 or SSE)로 변경하거나, **예약 진행중** 상태를 두고 별도 재처리 배치로 최종 일관성을 보장.
+
+---
+
+## 2. 중복 결제 방지 — 멱등성 구조
 
 ### 상황
-00시에 1,000명이 동시에 POST /bookings를 요청할 때, 재고 10개가 정확히 10건만 성공해야 한다.
+
+주문서에서 버튼 중복 클릭, 네트워크 타임아웃 후 재시도 등으로 짧은 간격에 동일 요청이 복수 유입될 수 있다. 결제가 두 번 실행되거나 재고가 이중 선점되어서는 안 된다.
 
 ### 선택지
-| 방식 | 설명 | 문제점 |
-|------|------|--------|
-| DB SELECT + UPDATE | 재고 조회 후 감소 | 두 쿼리 사이 경쟁 조건 → 초과 판매 가능 |
-| DB SELECT FOR UPDATE | 비관적 락 | 락 직렬화로 TPS 급감, 커넥션 풀 고갈 위험 |
-| Redis DECR | 단순 감소 | DECR 후 음수 확인 → 음수 도달 전 여러 스레드 통과 가능 |
-| **Redis Lua 스크립트** | 조회-감소를 원자적 실행 | 없음 |
 
-### 결정: Redis Lua 스크립트
-```lua
-local current = tonumber(redis.call('GET', KEYS[1]))
-if current == nil then return -1 end
-if current < tonumber(ARGV[1]) then return -2 end
-return redis.call('DECRBY', KEYS[1], ARGV[1])
+| 방식 | 문제점 |
+|------|--------|
+| DB `UNIQUE` 제약만 사용 | 중복 요청이 재고 선점 단계까지 통과한 뒤 DB 충돌 → 재고 이중 감소 후 DB 단에서 실패 |
+| 애플리케이션 레벨 synchronized | 단일 인스턴스에서만 유효, 다중 인스턴스 환경에서 무의미 |
+| **Redis SETNX (1차) + DB UNIQUE (2차)** | 중복 요청을 비즈니스 로직 진입 전에 차단 |
+
+### 결정: Redis SETNX + DB UNIQUE 이중 보호
+
 ```
-Redis는 싱글 스레드로 Lua 스크립트를 원자적으로 실행하므로, 재고 조회와 감소 사이의 경쟁 조건이 원천 차단된다. `DECRBY` 반환값으로 성공/실패를 즉시 판단하여 DB 접근 없이 초기 거부(early rejection)가 가능하다.
+첫 요청  → SETNX "PROCESSING" 성공 → 재고 선점 → 결제 → DB 저장 → orderId 기록
+재시도   → SETNX 실패 (키 존재)
+           └─ "PROCESSING" → 200 PENDING 반환 (처리 중임을 클라이언트에 전달)
+           └─ orderId     → DB 재조회 → 동일 응답 반환
+```
+
+**처리 중 응답을 200으로 반환하는 이유**: 클라이언트 입장에서 200를 받으면 성공으로 처리해 재시도를 멈출 수 있다. 200 PENDING은 "진행 중이니 잠시 기다려달라"는 의미이다.
+
+**Redis에 orderId를 저장하는 이유**: 완료된 요청의 재시도는 orderId로 DB를 재조회해 응답을 재구성한다. DB가 단일 진실 소스(Single Source of Truth)이므로 캐시와의 불일치가 발생하지 않고, 모수 자체가 적어 부하를 크게 고민하지 않아도 된다 판단.
+
+**실패 시 키를 삭제하는 이유**: 일시적 오류(PG 타임아웃, Redis 순간 장애 등)로 실패한 요청은 재시도했을 때 성공해야 한다. 실패 결과를 캐싱하면 재시도가 영구적으로 차단된다. 키를 삭제하면 다음 요청이 새 트랜잭션으로 처음부터 시작된다.
 
 ---
 
-## 2. 고가용성 — 순간 TPS 스파이크 대응
+## 3. 결제 확장성 — Strategy 패턴 + Spring Bean 자동 등록
 
 ### 상황
-평시 50 TPS → 00시 순간 500~1,000 TPS. 인프라 증설이 제한적인 상황.
 
-### 선택과 근거
-
-**Redis early rejection**
-재고 소진 여부를 Redis에서 즉시 판단해 DB 트랜잭션 진입 전에 거부한다. 재고 소진 후 유입되는 수백~수천 TPS가 DB에 도달하지 않으므로, DB 커넥션 풀이 보호된다.
-
-**사용자 중복 구매 차단 (DB UNIQUE 제약)**
-`orders.(user_id, product_id)` UNIQUE 제약으로 동일 사용자의 다중 재고 선점 시도를 DB 레벨에서 차단한다. 이로써 한 사용자가 여러 슬롯을 점유하는 불공정 시나리오를 방지한다.
-
-**멱등성 키**
-클라이언트의 재시도로 인한 중복 요청이 Redis SETNX로 걸러지므로, 재시도 트래픽이 DB로 유입되지 않는다.
-
-**Redis Lettuce 커넥션 풀**
-```yaml
-lettuce.pool.max-active: 30
-lettuce.pool.max-wait: 200ms
-```
-커넥션 대기 상한을 200ms로 제한해 스파이크 시 스레드 블로킹을 최소화한다.
-
----
-
-## 3. 멱등성 — Redis SETNX 기반 중복 처리 방지
-
-### 상황
-주문서에서 짧은 간격으로 POST /bookings가 중복 호출될 때, 결제가 두 번 일어나서는 안 된다.
+현재 결제 수단은 신용카드, Y페이, Y포인트다. 향후 새로운 결제 수단이 추가될 때 `BookingService`의 비즈니스 로직 수정을 최소화해야 한다.
 
 ### 선택지
+
 | 방식 | 문제점 |
 |------|--------|
-| DB `idempotency_key` UNIQUE만 사용 | DB 트랜잭션 직전까지 중복 요청이 처리 파이프라인을 통과 → 재고 이중 선점 후 DB에서 충돌 |
-| **Redis SETNX + DB UNIQUE 이중 보호** | Redis가 처리 파이프라인 진입 전에 차단 |
-
-### 결정: Redis SETNX (1차) + DB UNIQUE (2차)
-- `SETNX idempotency:{key} PROCESSING` — 최초 요청만 통과, 이후 동일 키는 즉시 거부
-- 처리 완료 후 결과(JSON)를 같은 키에 덮어써 캐싱, 재요청 시 캐시된 응답 반환
-- DB의 `idempotency_key` UNIQUE 제약은 Redis 장애 시 최후 안전망 역할
-
----
-
-## 4. Redis 장애 Fallback — 원자적 조건부 UPDATE
-
-### 상황
-Redis가 다운되면 재고 선점 불가 → 서비스 전체 중단.
-
-### 선택지 비교
-| 방식 | 문제점 |
-|------|--------|
-| 낙관적 락 (`@Version`) | 동일 행에 대량 동시 UPDATE → 대부분 버전 충돌 → retry storm → DB 부하 폭증 |
-| 비관적 락 (SELECT FOR UPDATE) | 락 보유 시간 동안 전체 직렬화 → 처리량 급감, 커넥션 점유 |
-| **원자적 조건부 UPDATE** | DB 내부 행 레벨 락으로 원자성 보장, retry 불필요 |
-
-### 결정: 원자적 조건부 UPDATE (DB fallback)
-```sql
-UPDATE inventories
-SET reserved_stock = reserved_stock + 1
-WHERE product_id = ? AND (total_stock - reserved_stock) >= 1
-```
-InnoDB는 단일 UPDATE 실행 시 내부적으로 행 레벨 락을 획득하므로 원자성이 보장된다. `affected rows`가 1이면 성공, 0이면 재고 소진으로 즉시 판단하며 애플리케이션 레벨 retry가 필요 없다.
-
-Resilience4j 서킷브레이커가 Redis 연속 실패를 감지하면 자동으로 이 경로로 전환된다.
-
-```yaml
-resilience4j.circuitbreaker.instances.redis-inventory:
-  failure-rate-threshold: 50       # 실패율 50% 초과 시 오픈
-  wait-duration-in-open-state: 30s # 30초 후 half-open 시도
-  sliding-window-size: 10
-  minimum-number-of-calls: 5
-```
-
-**비용 대비 효과**
-Redis 추가 비용(서버 1대): 대량 트래픽을 DB 앞단에서 흡수해 DB 스케일업 비용보다 저렴하다. 서킷브레이커로 Redis 장애 시에도 DB fallback이 자동 작동하므로 가용성이 유지된다.
-
----
-
-## 5. 결제 확장성 — Strategy 패턴 + Spring Bean 자동 등록
-
-### 상황
-현재 결제 수단: 신용카드, Y페이, Y포인트. 향후 새로운 결제 수단 추가 시 BookingService 수정을 최소화해야 한다.
-
-### 선택지
-| 방식 | 문제점 |
-|------|--------|
-| BookingService에 `when` 분기 | 결제 수단 추가마다 핵심 비즈니스 로직 수정 → OCP 위반 |
-| **Strategy 패턴 + Spring DI** | 새 전략 Bean 등록만으로 확장 완료 |
+| `BookingService`에 `when` 분기 | 결제 수단 추가마다 핵심 예약 흐름 수정 → OCP 위반, 테스트 범위 확대 |
+| **Strategy 패턴 + Spring DI** | 새 전략 Bean 등록만으로 확장 완료, 기존 코드 무수정 |
 
 ### 결정: Strategy 패턴
+
 ```kotlin
 interface PaymentStrategy {
     val supportedMethod: PaymentMethod
@@ -123,26 +128,89 @@ interface PaymentStrategy {
     fun refund(transactionId: String, amount: Long): RefundResult
 }
 ```
-`PaymentProcessor`는 `List<PaymentStrategy>`를 주입받아 `Map<PaymentMethod, PaymentStrategy>`로 관리한다. 새 결제 수단 추가 시:
 
-1. `PaymentStrategy` 구현체 작성
-2. `@Component` 등록
+`PaymentProcessor`는 `List<PaymentStrategy>`를 주입받아 `Map<PaymentMethod, PaymentStrategy>`로 관리한다. 새로운 결제 수단을 추가할 때 변경이 필요한 범위:
 
-→ `BookingService`, `PaymentProcessor`, `PaymentValidator` 코드 수정 없음.
+- **추가**: `PaymentStrategy` 구현체 + `@Component` 등록, `PaymentMethod` enum 값 추가
+- **무수정**: `BookingService`, `PaymentProcessor`, `PaymentValidator`
 
-**복합 결제 처리 순서**
-`CREDIT_CARD → Y_PAY → Y_POINTS` 순으로 처리한다. 외부 PG 결제를 먼저 처리하고 포인트를 마지막에 차감하여, 실패 시 환불 복잡도를 최소화한다 (포인트는 DB 차감이므로 트랜잭션 내 즉시 롤백 가능).
+`PaymentValidator`의 조합 규칙은 새 수단 추가 시 검토가 필요하지만, 이는 비즈니스 정책 변경이므로 수정이 타당하다. 예약 흐름 자체는 수정되지 않는다.
+
+### 복합 결제 처리 순서
+
+`CREDIT_CARD → Y_PAY → Y_POINTS` 순서로 처리한다.
+
+외부 PG 결제를 먼저 시도하고 Y포인트 차감을 마지막에 수행한다. Y포인트는 DB 차감이므로 `@Transactional` 롤백으로 즉시 복구가 가능하다. 반면 외부 PG 결제는 환불 API 호출이 필요하다. Y포인트를 먼저 차감했다가 PG 결제가 실패하면 포인트 환불 API도 별도로 호출해야 하는 복잡도가 생긴다. 이 순서를 지킴으로써 실패 시 환불 범위가 최소화된다.
 
 ---
 
-## 6. 결제 실패 대응
+## 4. 장애 대응 및 예외 처리
 
-### 처리 흐름
-1. `PaymentProcessor.processAll()` — 결제를 순서대로 처리
-2. 하나라도 실패 시 → 이미 성공한 결제를 역순으로 즉시 환불
-3. 재고 복구 → `InventoryRedisService.increment()` (Redis 장애 시엔 이미 DB fallback 경로)
-4. Order 상태 → `FAILED`
-5. 멱등성 키 → `FAILED` + 실패 사유 저장
+### 4-a. Redis 장애 시 Fallback 전략
 
-### 환불 실패 처리
-환불 자체가 실패하는 경우(PG사 장애 등)는 로그에 기록하고, 별도 배치/수동 처리 프로세스로 위임한다. 이중 결제보다 이중 환불 시도가 더 안전하므로 환불은 멱등하게 설계된다.
+#### 상황
+
+Redis가 다운되면 재고 선점(Lua DECR)이 불가능해져 서비스 전체가 중단된다.
+
+#### 선택지
+
+| 방식 | 문제점 |
+|------|--------|
+| 낙관적 락 (`@Version`) | 동일 행에 대량 동시 UPDATE → 대부분 버전 충돌 → retry storm → DB 부하 폭증 |
+| 비관적 락 (`SELECT FOR UPDATE`) | 락 보유 시간 동안 전체 직렬화 → 처리량 급감, 커넥션 점유 증가 |
+| **원자적 조건부 UPDATE** | 단일 쿼리로 원자성 보장, retry 불필요 |
+
+#### 결정: 원자적 조건부 UPDATE (QueryDSL)
+
+```sql
+UPDATE inventories
+SET reserved_stock = reserved_stock + 1
+WHERE product_id = ?
+  AND (total_stock - reserved_stock) >= 1
+```
+
+InnoDB는 단일 UPDATE에서 내부적으로 행 레벨 락을 획득하므로 원자성이 보장된다. `affected rows = 1`이면 성공, `0`이면 재고 소진으로 즉시 판단하며 애플리케이션 레벨 retry가 필요 없다.
+
+Resilience4j Circuit Breaker가 Redis 연속 실패를 감지해 자동으로 이 경로로 전환한다.
+
+```yaml
+resilience4j.circuitbreaker.instances.redis-inventory:
+  failure-rate-threshold: 50       # 실패율 50% 초과 시 서킷 오픈
+  wait-duration-in-open-state: 30s # 30초 후 half-open 재시도
+  sliding-window-size: 10
+  minimum-number-of-calls: 5
+```
+
+**트레이드오프**: Redis 장애 시 재고 선점이 DB로 내려오므로 DB 부하가 증가한다. 다만 Redis 장애 자체가 이미 비정상 상황이며, 가용성(장애 시에도 예약 처리 계속)을 선택했다. Redis가 복구되면 서킷이 half-open → closed로 복귀한다.
+
+---
+
+### 4-b. 결제 실패 케이스 대응
+
+#### 결제 실패 시 처리 흐름
+
+```
+PaymentProcessor.processAll() 실패
+│
+├─ 1. 이미 성공한 외부 PG 결제를 역순으로 환불 (rollbackAll)
+│      └─ Y포인트는 @Transactional 롤백으로 자동 복구 (별도 환불 호출 불필요)
+│
+├─ 2. 재고 복구: InventoryRedisService.increment(productId)
+│
+├─ 3. @Transactional 롤백: Order, Payment 모두 DB 미저장
+│      └─ FAILED 상태의 주문이 DB에 남지 않음
+│
+└─ 4. 멱등키 release (Redis key 삭제): 클라이언트 재시도 허용
+```
+
+#### FAILED 주문을 DB에 저장하지 않는 이유
+
+FAILED 주문을 저장하면 `uq_orders_user_product` UNIQUE 제약 때문에 동일 사용자의 재시도가 `ALREADY_PURCHASED`로 막힌다. 즉, 결제 실패 후 재시도가 불가능해진다. 실패한 주문은 DB가 아닌 애플리케이션 로그로 감사 가능하므로 DB 저장의 필요성이 없다.
+
+#### 환불 실패 처리
+
+환불 API 호출이 실패하는 경우(PG사 장애 등)는 예외를 삼키고 로그에 기록한다. 환불은 원거래 `transactionId`를 멱등키로 사용하므로 동일 `transactionId`로 재시도해도 이중 환불이 발생하지 않는다. 별도 배치 또는 운영팀의 수동 처리 프로세스로 위임한다. 환불 실패가 원래 결제 실패 응답 자체를 막아서는 안 된다.
+
+#### Y포인트 처리의 특수성
+
+Y포인트는 DB를 직접 차감하므로 외부 PG와 달리 `@Transactional` 롤백만으로 복구된다. 이 때문에 처리 순서에서 Y포인트를 마지막으로 배치했다. 신용카드 또는 Y페이가 실패할 경우 포인트는 이미 차감되지 않았으므로 별도 환불 로직이 불필요하다.

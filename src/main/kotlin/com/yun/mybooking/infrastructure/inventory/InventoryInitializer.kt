@@ -8,6 +8,9 @@ import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
 import org.springframework.stereotype.Component
 
+/**
+ * 개발 산출물 검증 편의를 위해 레디스에 재고 데이터를 미리 채워놓기 위한 용도
+ */
 @Component
 class InventoryInitializer(
     private val productRepository: ProductRepository,
