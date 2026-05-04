@@ -1,3 +1,3 @@
 package com.yun.mybooking.domain.order
 
-enum class OrderStatus { PENDING, CONFIRMED, CANCELLED }
+enum class OrderStatus { PENDING, CONFIRMED }

@@ -45,16 +45,6 @@ class PaymentProcessor(strategies: List<PaymentStrategy>) {
         })
     }
 
-    fun refundAll(completedPayments: List<CompletedPayment>) {
-        completedPayments.reversed().forEach { payment ->
-            runCatching {
-                strategyMap[payment.method]?.refund(payment.transactionId, payment.amount)
-            }.onFailure {
-                log.error("환불 실패: method={}, transactionId={}", payment.method, payment.transactionId, it)
-            }
-        }
-    }
-
     private fun rollbackAll(completed: List<Pair<PaymentRequest, PaymentResult>>) {
         completed.reversed().forEach { (req, res) ->
             if (res.transactionId != null) {
