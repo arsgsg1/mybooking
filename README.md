@@ -19,7 +19,11 @@
 ### 1. 인프라 기동
 
 ```bash
+# Docker Desktop 3.4+ (Compose V2)
 docker compose up -d
+
+# 구버전 환경 (Compose V1 standalone)
+docker-compose up -d
 ```
 
 MySQL 8.0 (3306), Redis 7 (6379) 컨테이너를 백그라운드로 실행합니다.
@@ -45,10 +49,14 @@ MySQL 8.0 (3306), Redis 7 (6379) 컨테이너를 백그라운드로 실행합니
 ### 3. 종료 및 정리
 
 ```bash
-Ctrl+C                   # 애플리케이션 종료
+Ctrl+C                              # 애플리케이션 종료
 
-docker compose down      # 컨테이너 종료 (볼륨 유지)
-docker compose down -v   # 컨테이너 종료 + 볼륨 삭제 (데이터 초기화)
+docker compose down                 # 컨테이너 종료 (볼륨 유지)
+docker compose down -v              # 컨테이너 종료 + 볼륨 삭제 (데이터 초기화)
+
+# 구버전 환경
+docker-compose down
+docker-compose down -v
 ```
 
 ---

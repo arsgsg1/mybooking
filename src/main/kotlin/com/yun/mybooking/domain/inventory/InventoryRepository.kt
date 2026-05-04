@@ -1,33 +1,17 @@
 package com.yun.mybooking.domain.inventory
 
-import com.querydsl.jpa.impl.JPAQueryFactory
-import com.yun.mybooking.domain.inventory.QInventory.inventory
+import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
-import org.springframework.data.jpa.repository.Modifying
+import org.springframework.data.jpa.repository.Lock
+import org.springframework.data.jpa.repository.Query
 import org.springframework.stereotype.Repository
 
 @Repository
-interface InventoryRepository : JpaRepository<Inventory, Long>, InventoryRepositoryCustom {
+interface InventoryRepository : JpaRepository<Inventory, Long> {
 
     fun findByProductId(productId: Long): Inventory?
-}
 
-interface InventoryRepositoryCustom {
-    @Modifying(clearAutomatically = true)
-    fun atomicReserve(productId: Long, amount: Int): Long
-}
-
-class InventoryRepositoryImpl(
-    private val queryFactory: JPAQueryFactory,
-) : InventoryRepositoryCustom {
-
-    override fun atomicReserve(productId: Long, amount: Int): Long =
-        queryFactory
-            .update(inventory)
-            .set(inventory.reservedStock, inventory.reservedStock.add(amount))
-            .where(
-                inventory.productId.eq(productId),
-                inventory.totalStock.subtract(inventory.reservedStock).goe(amount),
-            )
-            .execute()
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM Inventory i WHERE i.productId = :productId")
+    fun findByProductIdWithLock(productId: Long): Inventory?
 }

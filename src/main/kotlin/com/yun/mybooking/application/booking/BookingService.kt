@@ -109,9 +109,10 @@ class BookingService(
 
     @Suppress("unused")
     fun reserveInventoryFallback(productId: Long, ex: Exception) {
-        log.warn("Redis 서킷브레이커 오픈 — DB fallback으로 재고 선점: productId={}", productId)
-        val affected = inventoryRepository.atomicReserve(productId, 1)
-        if (affected == 0L) throw BookingException(ErrorCode.SOLD_OUT)
+        log.warn("Redis 서킷브레이커 오픈 — DB fallback으로 재고 확인: productId={}", productId)
+        val inventory = inventoryRepository.findByProductId(productId)
+            ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
+        if (inventory.remainingStock <= 0) throw BookingException(ErrorCode.SOLD_OUT)
     }
 
     @Transactional
@@ -137,6 +138,9 @@ class BookingService(
             is ProcessResult.Success -> {
                 order.confirm()
                 orderRepository.save(order)
+                val inventory = inventoryRepository.findByProductIdWithLock(request.productId)
+                    ?: throw BookingException(ErrorCode.INVENTORY_NOT_FOUND)
+                inventory.reserve()
                 val payments = savePayments(order.id, result.payments)
                 return toResponse(order, product, payments)
             }

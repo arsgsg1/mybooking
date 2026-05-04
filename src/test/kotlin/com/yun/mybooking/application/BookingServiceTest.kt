@@ -4,7 +4,7 @@ import com.yun.mybooking.application.booking.BookingRequest
 import com.yun.mybooking.application.booking.BookingService
 import com.yun.mybooking.common.exception.BookingException
 import com.yun.mybooking.common.exception.ErrorCode
-
+import com.yun.mybooking.domain.inventory.Inventory
 import com.yun.mybooking.domain.inventory.InventoryRepository
 import com.yun.mybooking.domain.order.Order
 import com.yun.mybooking.domain.order.OrderRepository
@@ -69,6 +69,13 @@ class BookingServiceTest {
         yPoints = 100000L,
     )
 
+    private val inventory = Inventory(
+        id = 1L,
+        productId = 1L,
+        totalStock = 10,
+        reservedStock = 0,
+    )
+
     private val savedOrder = Order(
         id = 1L,
         userId = 1L,
@@ -106,6 +113,7 @@ class BookingServiceTest {
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Success(
             listOf(CompletedPayment(PaymentMethod.CREDIT_CARD, 150000L, "cc_tx_001"))
         )
+        every { inventoryRepository.findByProductIdWithLock(1L) } returns inventory
         every { paymentRepository.save(any()) } returnsArgument 0
         every { idempotencyService.complete(idempotencyKey, 1L) } returns Unit
 
@@ -227,6 +235,7 @@ class BookingServiceTest {
         every { paymentProcessor.processAll(any()) } returns ProcessResult.Success(
             listOf(CompletedPayment(PaymentMethod.CREDIT_CARD, 150000L, "cc_tx_002"))
         )
+        every { inventoryRepository.findByProductIdWithLock(1L) } returns inventory
         every { paymentRepository.save(any()) } returnsArgument 0
         every { idempotencyService.complete(idempotencyKey, 1L) } returns Unit
 
